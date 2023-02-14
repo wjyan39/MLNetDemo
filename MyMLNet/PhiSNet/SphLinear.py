@@ -1,9 +1,10 @@
 import torch 
 import torch.nn as nn 
 
-from BasicUtility.O3.O3Layers import IELin, SelfMixing
+from BasicUtility.O3.O3Layers import IELin
 from BasicUtility.O3.O3Tensor import SphericalTensor, O3Tensor 
 from BasicUtility.ActivationFunc import activation_getter 
+from PhiSNet.Mixing import SelfMixing
 
 class SphLinear(nn.Module):
     """
@@ -143,13 +144,4 @@ class ScaLinear(nn.Module):
             rep_dims=(x.dim()-1,),
             metadata=self.metadata_out
         )
-
-
-    
-
-
-
-
-        
-
 

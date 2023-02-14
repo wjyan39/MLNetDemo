@@ -3,7 +3,7 @@ import torch.nn as nn
 
 from BasicUtility.O3.O3Tensor import SphericalTensor, O3Tensor 
 from BasicUtility.O3.SphericalHamornics import RSHxyz
-from BasicUtility.O3.O3Layers import PairMixing
+from PhiSNet.Mixing import PairMixing
 from PhiSNet.SphLinear import SphLinear, ScaLinear 
 import torch_geometric
 
@@ -20,7 +20,7 @@ class MessagePassingBlock(torch_geometric.nn.MessagePassing):
         self.num_features = num_features
 
     def message(self, x_j, edge_attr):
-        geom_filter = self.scalin(self.envelop(edge_attr[..., 1], self.num_features))
+        geom_filter = self.scalin(self.envelop(edge_attr[..., 1]))
         broadcast_rsh = self.sphlin(edge_attr[..., 0])
         msg_a_ten =  x_j.ten * geom_filter.ten * broadcast_rsh.ten
         msg_b = self.pairmix(x_j, broadcast_rsh, edge_attr[..., 0]) 
@@ -32,9 +32,7 @@ class MessagePassingBlock(torch_geometric.nn.MessagePassing):
     
     def forward(self, x, edge_index, edge_attr):
         return self.propagate(edge_index, x=x, edge_attr=edge_attr)
-        
-        
- 
+         
 
 class InteractBlock(nn.Module):
     """
@@ -47,7 +45,3 @@ class InteractBlock(nn.Module):
     def forward(self, x, edge_index, edge_attr):
         msg_x = self.message_passing(x, edge_index, edge_attr) 
         return msg_x 
-
-
-
-
