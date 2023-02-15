@@ -221,7 +221,7 @@ def get_rsh_cg_coefficients(j1, j2, j):
     c2r_j1, c2r_j2, c2r_j = csh_to_rsh(j1), csh_to_rsh(j2), csh_to_rsh(j)         
     # making the coefficients all real 
     rsh_cg = torch.einsum(
-        "abc, ai, bj, ck -> ijk", csh_cg.to(torch.double), c2r_j1, c2r_j2, c2r_j.conj()
+        "abc, ai, bj, ck -> ijk", csh_cg.to(torch.cdouble), c2r_j1, c2r_j2, c2r_j.conj()
     )*(-1j)**(j1+j2+j) 
     assert torch.allclose(rsh_cg.imag, torch.zeros_like(csh_cg)), print(csh_cg, rsh_cg) 
     return cg_compactify(rsh_cg.real, j1, j2, j) 
