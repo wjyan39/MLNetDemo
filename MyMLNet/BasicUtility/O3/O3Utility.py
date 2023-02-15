@@ -204,7 +204,7 @@ class LeviCivitaCoupler(torch.nn.Module):
             )
 
 
-def get_clebsh_gordan_coefficient(j1, j2, j, m1, m2, m):
+def get_clebsch_gordan_coefficient(j1, j2, j, m1, m2, m):
     """
     Generate Clebsh_Gordan coefficients via sympy with caching.
     """
@@ -217,7 +217,7 @@ def get_rsh_cg_coefficients(j1, j2, j):
         for m2 in range(-j2, j2+1):
             if abs(m1 + m2) > j:
                 continue 
-            csh_cg[j1 + m1, j2 + m2, j + m1 + m2] = get_clebsh_gordan_coefficient(j1, j2, m1, m2, m1+m2) 
+            csh_cg[j1 + m1, j2 + m2, j + m1 + m2] = get_clebsch_gordan_coefficient(j1, j2, m1, m2, m1+m2) 
     c2r_j1, c2r_j2, c2r_j = csh_to_rsh(j1), csh_to_rsh(j2), csh_to_rsh(j)         
     # making the coefficients all real 
     rsh_cg = torch.einsum(
