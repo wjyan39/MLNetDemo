@@ -31,7 +31,7 @@ class SelfMixing(nn.Module):
             raise NotImplementedError
         self.group = group 
         num_channels_in = torch.sum(metadata).item() 
-        num_channels_out = torch.sum(self.CGCoupler.metadata_out, dim=1).item() 
+        num_channels_out = torch.sum(self.CGCoupler.metadata_out).item() 
         self.register_parameter("keep_coeff", torch.nn.Parameter(torch.Tensor(num_channels_in)))
         self.register_parameter("mix_coeff", torch.nn.Parameter(torch.Tensor(num_channels_out)))
         self._init_parameters()
@@ -41,11 +41,11 @@ class SelfMixing(nn.Module):
         torch.nn.init.uniform_(self.mix_coeff, a=-np.sqrt(3), b=np.sqrt(3)) 
         if self.group == "so3":
             dummy_coupler = CGCoupler(self.metadata_in, self.metadata_in, max_l=self.order_out, overlap_out=True, trunc_in=False)
-            metadata_out = dummy_coupler.metadata_out[0, :self.metadata_in.shape[0]] 
+            metadata_out = dummy_coupler.metadata_out[::self.metadata_in.shape[0]] 
             n_irreps_per_l =  torch.arange(start=0, end=self.metadata_in.shape[0]) * 2 + 1 
         elif self.group == "o3":
             dummy_coupler = CGPCoupler(self.metadata_in, self.metadata_in, max_l=self.order_out, overlap_out=True, trunc_in=False)
-            metadata_out = dummy_coupler.metadata_out[0, :self.metadata_in.shape[0]]
+            metadata_out = dummy_coupler.metadata_out[:self.metadata_in.shape[0]]
             n_irreps_per_l =  torch.arange(start=0, end=self.metadata_in.shape[0]//2) * 2 + 1
             n_irreps_per_l = n_irreps_per_l.repeat_interleave(2)
         else:
@@ -62,12 +62,19 @@ class SelfMixing(nn.Module):
         metadata_cp = torch.minimum(self.metadata_in, metadata_out)
         repids_in, repids_out = [], []
         for cur_l in range(self.metadata_in.shape[0]):
+            degeneracy = 2*cur_l+1
+            ls_segement = torch.arange(degeneracy).repeat_interleave(metadata_cp[cur_l]) 
+            ns_segement = torch.arange(metadata_cp[cur_l]).repeat(degeneracy) 
             repids_in_3j = (
-                repid_offsets[0, cur_l] + torch.arange(metadata_cp[cur_l])
+                repid_offsets[0, cur_l]
+				+ ls_segement * metadata_tmp[0, cur_l]
+				+ ns_segement
             )
             repids_out_3j = (
-                repid_offsets[1, cur_l] + torch.arange(metadata_cp[cur_l])
-            )
+                repid_offsets[1, cur_l]
+				+ ls_segement * metadata_tmp[1, cur_l]
+				+ ns_segement
+			)
             repids_in.append(repids_in_3j)
             repids_out.append(repids_out_3j) 
         self.register_buffer("repids_in", torch.cat(repids_in).long())
