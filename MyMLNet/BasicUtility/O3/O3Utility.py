@@ -298,7 +298,7 @@ class CGCoupler(torch.nn.Module):
             [torch.LongTensor([[0], [0]]), repid_offsets_in[:, :-1]], dim=1
         ).long() 
 
-        max_n_out = torch.zeros(self.max_l).long()
+        max_n_out = torch.zeros(self.max_l+1).long()
         max_n_out[:in_size] = torch.maximum(self.metadata_in1, self.metadata_in2) 
         max_n_out[in_size:] = max_n_out[in_size-1].item() 
         cg_tilde, repids_in1, repids_in2, repids_out = [], [], [], [] 
@@ -466,7 +466,7 @@ class CGPCoupler(torch.nn.Module):
             [torch.LongTensor([[0], [0]]), repid_offsets_in[:, :-1]], dim=1
         ).long()
         
-        max_n_out = torch.zeros(self.max_l).long()
+        max_n_out = torch.zeros(self.max_l+1).long()
         max_n_out[:in_size] = torch.maximum(self.metadata_in1, self.metadata_in2) 
         max_n_out[in_size:] = max_n_out[in_size-1].item()
         cg_tilde, repids_in1, repids_in2, repids_out = [], [], [], []
