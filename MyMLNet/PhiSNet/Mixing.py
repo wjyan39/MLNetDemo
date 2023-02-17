@@ -151,14 +151,14 @@ class SelfMixing(nn.Module):
         )
         
 
-class PairMixing(torch.nn.Module):
+class PairMixing(nn.Module):
     def __init__(self, envelop, filter_channels:int, metadata_1:torch.LongTensor, metadata_2:torch.LongTensor, order_out:int, group="so3"):
-        super().__init__()
         assert metadata_1.dim() == 1
         assert metadata_2.dim() == 1 
         # pair mixing occurs between 2 node spherical tensors in the same layer,
         # so ensure that they have same layout. 
         assert metadata_1.shape[0] == metadata_2.shape[0]
+        super().__init__()
         self.order_out = max(order_out, metadata_1.shape[0])
         group = group.lower()
         if group == "so3":
@@ -185,35 +185,32 @@ class PairMixing(torch.nn.Module):
             n_irreps_per_l = n_irreps_per_l.repeat_interleave(2)
             stepwise = 2 
         # get the metadata of the overlap reduction 
-        cur_l_out = -1 
         for (lout, _, _, degeneracy) in valid_coupling_ids:
-            if lout > cur_l_out:
-                cur_l_out = lout
-            if degeneracy > metadata_out[cur_l_out]:
-                metadata_out[cur_l_out] = degeneracy
+            metadata_out[lout] = max(metadata_out[lout], degeneracy)
             
-        # generate flatten indexing for various tensor
+        # generate flatten indexing for various tensors
         max_n_out = metadata_out.max().item()
         repid_offsets_out = torch.cumsum(metadata_out * n_irreps_per_l, dim=0)
         repid_offsets_out = torch.cat(
             [torch.LongTensor([0]), repid_offsets_out[:-1]], dim=0
         )
-        repids_out, matrix_select_idx, matid_to_fanin = [], [], []
+        repids_out = [] # final output index for index_add
+        tmp_out = [[] for _ in range(metadata_out.shape[0])]
+        matrix_select_idx, matid_to_fanin = [], [], []
         out_reduce_idx, out_reduce_mask = [], []
         mat_offset, dst_offset = 0, 0 
-        for (lpout, lpin1, lpin2, degeneracy) in valid_coupling_ids:
-            lin1, lin2, lout = lpin1//stepwise, lpin2//stepwise, lpout//stepwise 
-            cg_source = get_rsh_cg_coefficients(lin1, lin2, lout) 
-            cg_segment = cg_source.repeat_interleave(degeneracy, dim=1)
-            ns_segment = torch.arange(degeneracy).repeat(cg_source.shape[1]) 
+        for (lpout, _, _, degeneracy) in valid_coupling_ids:
             # Calculating the representation IDs for the coupling tensors
+            l_degeneracy = 2 * (lpout // stepwise) + 1
+            ls_segement = torch.arange(l_degeneracy).repeat_interleave(degeneracy)
+            ns_segement = torch.arange(degeneracy).repeat(l_degeneracy)
             repids_out_3j = (
                 repid_offsets_out[lpout]
-                + (cg_segment[2] + lout) * metadata_out[lpout]
-                + ns_segment
-            )
-            repids_out.append(repids_out_3j)
-
+                + ls_segement * metadata_out[lpout]
+                + ns_segement
+            ).view(l_degeneracy, -1)
+            tmp_out[lpout].append(repids_out_3j)
+            # linear transform matrix indexing
             matrix_select_idx.append(
                 (torch.arange(1, dtype=torch.long) + mat_offset).repeat(n_irreps_per_l[lpout])
             )
@@ -221,19 +218,24 @@ class PairMixing(torch.nn.Module):
                 torch.full((1,), self.filter_channels, dtype=torch.long)
             )
             mat_offset += 1
-
+            out_ns_offset = self.CGCoupler.metadata_out[lpout].item()
             for m in range(n_irreps_per_l[lpout]):
                 dst_idx_lpm = (
-                    dst_offset 
+                    dst_offset
+                    + out_ns_offset
                     + torch.arange(max_n_out, dtype=torch.long) 
-                ).contiguous 
+                ).contiguous() 
                 dst_mask_lpm = torch.zeros(
                     max_n_out, dtype=torch.long
                 )
                 dst_mask_lpm[:degeneracy] = 1
                 out_reduce_idx.append(dst_idx_lpm)
                 out_reduce_mask.append(dst_mask_lpm)
-                dst_offset += degeneracy
+                out_ns_offset += m * out_ns_offset
+            dst_offset += degeneracy 
+
+        for tmp_list in tmp_out:
+            repids_out.append(torch.cat(tmp_list, dim=1).view(-1))
 
         self.register_buffer("metadata_out", metadata_out)
         self.register_buffer("repids_cp_out", torch.cat(repids_out).long())
