@@ -217,7 +217,7 @@ def get_rsh_cg_coefficients(j1, j2, j):
         for m2 in range(-j2, j2+1):
             if abs(m1 + m2) > j:
                 continue 
-            csh_cg[j1 + m1, j2 + m2, j + m1 + m2] = get_clebsch_gordan_coefficient(j1, j2, m1, m2, m1+m2) 
+            csh_cg[j1 + m1, j2 + m2, j + m1 + m2] = get_clebsch_gordan_coefficient(j1, j2, j, m1, m2, m1+m2) 
     c2r_j1, c2r_j2, c2r_j = csh_to_rsh(j1), csh_to_rsh(j2), csh_to_rsh(j)         
     # making the coefficients all real 
     rsh_cg = torch.einsum(
@@ -282,7 +282,6 @@ class CGCoupler(torch.nn.Module):
         in_size1 = self.metadata_in1.shape[0]
         in_size2 = self.metadata_in2.shape[0] 
         in_size = max(in_size1, in_size2) 
-        n_irreps_per_l = torch.arange(start=0, end=in_size) * 2 + 1
         # zero padding 
         tmp_zeros = torch.zeros(abs(in_size1 - in_size2)).long()
         if in_size1 < in_size2:
@@ -290,13 +289,7 @@ class CGCoupler(torch.nn.Module):
         elif in_size1 > in_size2:
             self.metadata_in2 = torch.cat([self.metadata_in2, tmp_zeros], dim=0)  
         assert self.metadata_in1.shape[0] == self.metadata_in2.shape[0]
-        metadata_in = torch.stack([self.metadata_in1, self.metadata_in2], dim=0) 
-        repid_offsets_in = torch.cumsum(
-            metadata_in * n_irreps_per_l.unsqueeze(0), dim=1
-        )
-        repid_offsets_in = torch.cat(
-            [torch.LongTensor([[0], [0]]), repid_offsets_in[:, :-1]], dim=1
-        ).long() 
+        metadata_in = torch.stack([self.metadata_in1, self.metadata_in2], dim=0)
 
         max_n_out = torch.zeros(self.max_l+1).long()
         max_n_out[:in_size] = torch.maximum(self.metadata_in1, self.metadata_in2) 
@@ -342,7 +335,14 @@ class CGCoupler(torch.nn.Module):
                     # record valid coupling pattern 
                     if degeneracy > 0:
                         valid_coupling_ids.append((lout, lin1, lin2, degeneracy)) 
-        # offsets of output tensor
+        # offsets for input and output tensor
+        n_irreps_per_l = torch.arange(start=0, end=metadata_out.shape[0]) * 2 + 1
+        repid_offsets_in = torch.cumsum(
+            metadata_in * n_irreps_per_l[:in_size].unsqueeze(0), dim=1
+        )
+        repid_offsets_in = torch.cat(
+            [torch.LongTensor([[0], [0]]), repid_offsets_in[:, :-1]], dim=1
+        ).long()
         repid_offsets_out = torch.cumsum(metadata_out * n_irreps_per_l, dim=0) 
         repid_offsets_out = torch.cat(
             [torch.LongTensor([0]), repid_offsets_out[:-1]], dim=0
@@ -449,8 +449,8 @@ class CGPCoupler(torch.nn.Module):
         in_size1 = self.metadata_in1.shape[0]
         in_size2 = self.metadata_in2.shape[0] 
         in_size = max(in_size1, in_size2) 
-        n_irreps_per_l = torch.arange(start=0, end=in_size // 2) * 2 + 1
-        n_irreps_per_lp = n_irreps_per_l.repeat_interleave(2) 
+        # n_irreps_per_l = torch.arange(start=0, end=in_size // 2) * 2 + 1
+        # n_irreps_per_lp = n_irreps_per_l.repeat_interleave(2) 
         # zero padding 
         tmp_zeros = torch.zeros(abs(in_size1 - in_size2)).long()
         if in_size1 < in_size2:
@@ -459,12 +459,12 @@ class CGPCoupler(torch.nn.Module):
             self.metadata_in2 = torch.cat([self.metadata_in2, tmp_zeros], dim=0)  
         assert self.metadata_in1.shape[0] == self.metadata_in2.shape[0]
         metadata_in = torch.stack([self.metadata_in1, self.metadata_in2], dim=0) 
-        repid_offsets_in = torch.cumsum(
-            metadata_in * n_irreps_per_lp.unsqueeze(0), dim=1
-        )
-        repid_offsets_in = torch.cat(
-            [torch.LongTensor([[0], [0]]), repid_offsets_in[:, :-1]], dim=1
-        ).long()
+        # repid_offsets_in = torch.cumsum(
+        #     metadata_in * n_irreps_per_lp.unsqueeze(0), dim=1
+        # )
+        # repid_offsets_in = torch.cat(
+        #     [torch.LongTensor([[0], [0]]), repid_offsets_in[:, :-1]], dim=1
+        # ).long()
         
         max_n_out = torch.zeros(self.max_l+1).long()
         max_n_out[:in_size] = torch.maximum(self.metadata_in1, self.metadata_in2) 
@@ -514,7 +514,15 @@ class CGPCoupler(torch.nn.Module):
                                 # record valid coupling pattern 
                                 if degeneracy > 0:
                                     valid_coupling_ids.append((lout, lin1, lin2, degeneracy))
-        
+        # offsets for input and output 
+        n_irreps_per_l = torch.arange(start=0, end=metadata_out.shape[0] // 2) * 2 + 1
+        n_irreps_per_lp = n_irreps_per_l.repeat_interleave(2)
+        repid_offsets_in = torch.cumsum(
+            metadata_in * n_irreps_per_lp[:in_size].unsqueeze(0), dim=1
+        )
+        repid_offsets_in = torch.cat(
+            [torch.LongTensor([[0], [0]]), repid_offsets_in[:, :-1]], dim=1
+        ).long()
         repid_offsets_out = torch.cumsum(metadata_out * n_irreps_per_lp, dim=0)
         repid_offsets_out = torch.cat(
             [torch.LongTensor([0]), repid_offsets_out[:-1]], dim=0

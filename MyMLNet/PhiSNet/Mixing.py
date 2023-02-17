@@ -38,50 +38,70 @@ class SelfMixing(nn.Module):
 
     def _init_parameters(self):
         torch.nn.init.uniform_(self.keep_coeff, a=-np.sqrt(3), b=np.sqrt(3))
-        torch.nn.init.uniform_(self.mix_coeff, a=-np.sqrt(3), b=np.sqrt(3)) 
+        torch.nn.init.uniform_(self.mix_coeff, a=-np.sqrt(3), b=np.sqrt(3))  
+        # determine metadata_out 
+        metadata_out = torch.zeros_like(self.CGCoupler.metadata_out)
+        for (lpout, _, _, degeneracy) in self.CGCoupler.valid_coupling_ids:
+            metadata_out[lpout] = max(metadata_out[lpout], degeneracy)
+        # generate the flatenned idx for input, tensor product output and final coupled output
+        tmp_zeros = torch.zeros(metadata_out.shape[0] - self.metadata_in.shape[0]).long()
+        metadata_in = torch.cat([self.metadata_in, tmp_zeros], dim=0)
+        metadata_tmp = torch.stack([metadata_in, metadata_out], dim=0)
         if self.group == "so3":
-            dummy_coupler = CGCoupler(self.metadata_in, self.metadata_in, max_l=self.order_out, overlap_out=True, trunc_in=False)
-            metadata_out = dummy_coupler.metadata_out[::self.metadata_in.shape[0]] 
-            n_irreps_per_l =  torch.arange(start=0, end=self.metadata_in.shape[0]) * 2 + 1 
+            stepwise = 1
+            n_irreps_per_l =  torch.arange(start=0, end=metadata_out.shape[0]) * 2 + 1 
         elif self.group == "o3":
-            dummy_coupler = CGPCoupler(self.metadata_in, self.metadata_in, max_l=self.order_out, overlap_out=True, trunc_in=False)
-            metadata_out = dummy_coupler.metadata_out[:self.metadata_in.shape[0]]
-            n_irreps_per_l =  torch.arange(start=0, end=self.metadata_in.shape[0]//2) * 2 + 1
+            stepwise = 2 
+            n_irreps_per_l =  torch.arange(start=0, end=metadata_out.shape[0]//2) * 2 + 1
             n_irreps_per_l = n_irreps_per_l.repeat_interleave(2)
         else:
-            raise NotImplementedError 
-
-        metadata_tmp = torch.stack([self.metadata_in, metadata_out], dim=0)
+            raise NotImplementedError
         repid_offsets = torch.cumsum(
             metadata_tmp * n_irreps_per_l.unsqueeze(0), dim=1
         )
         repid_offsets = torch.cat(
             [torch.LongTensor([[0], [0]]), repid_offsets[:, :-1]], dim=1
         ).long() 
-        # generate representation channels for sum up
-        metadata_cp = torch.minimum(self.metadata_in, metadata_out)
+        # generate channels for tensor product output
+        repids_tp_out = []
+        tmp = [[] for _ in range(metadata_out.shape[0])]
+        ## loop over each valid coupling (l1, l2, l) to decide the output index
+        for (lpout, _, _, degeneracy) in self.CGCoupler.valid_coupling_ids:
+            l_degeneracy = 2 * (lpout // stepwise) + 1
+            ls_segement = torch.arange(l_degeneracy).repeat_interleave(degeneracy)
+            ns_segement = torch.arange(degeneracy).repeat(l_degeneracy)
+            repids_tp_out_3j = (
+                repid_offsets[1, lpout]
+                + ls_segement * metadata_out[lpout]
+                + ns_segement
+            ).view(l_degeneracy, -1)
+            tmp[lpout].append(repids_tp_out_3j) 
+        for tmp_list in tmp:
+            repids_tp_out.append(torch.cat(tmp_list, dim=1).view(-1))
+        # generate channels for final sum up  
+        metadata_cp = torch.minimum(self.metadata_in, metadata_out[:self.metadata_in.shape[0]])
         repids_in, repids_out = [], []
-        for cur_l in range(self.metadata_in.shape[0]):
-            degeneracy = 2*cur_l+1
-            ls_segement = torch.arange(degeneracy).repeat_interleave(metadata_cp[cur_l]) 
-            ns_segement = torch.arange(metadata_cp[cur_l]).repeat(degeneracy) 
+        for cur_lp in range(self.metadata_in.shape[0]):
+            l_degeneracy = 2 * (cur_lp // stepwise) + 1
+            ls_segement = torch.arange(l_degeneracy).repeat_interleave(metadata_cp[cur_lp]) 
+            ns_segement = torch.arange(metadata_cp[cur_lp]).repeat(l_degeneracy) 
             repids_in_3j = (
-                repid_offsets[0, cur_l]
-				+ ls_segement * metadata_tmp[0, cur_l]
+                repid_offsets[0, cur_lp]
+				+ ls_segement * metadata_tmp[0, cur_lp]
 				+ ns_segement
             )
             repids_out_3j = (
-                repid_offsets[1, cur_l]
-				+ ls_segement * metadata_tmp[1, cur_l]
+                repid_offsets[1, cur_lp]
+				+ ls_segement * metadata_tmp[1, cur_lp]
 				+ ns_segement
 			)
             repids_in.append(repids_in_3j)
             repids_out.append(repids_out_3j) 
         self.register_buffer("repids_in", torch.cat(repids_in).long())
         self.register_buffer("repids_out", torch.cat(repids_out).long())
-        self.register_buffer("metadata_out", dummy_coupler.metadata_out)
-        self.register_buffer("repids_cp_out", dummy_coupler.repids_out)
-        self.register_buffer("out_layout", dummy_coupler.out_layout)
+        self.register_buffer("metadata_out", metadata_out)
+        self.register_buffer("repids_tp_out", torch.cat(repids_tp_out).long())
+        self.register_buffer("out_layout", self.tensor_class.generate_rep_layout_1d_(metadata_out))
 
     def forward(self, x):
         """
@@ -111,9 +131,9 @@ class SelfMixing(nn.Module):
             self.out_layout.shape[1] if d == coupling_dim else x.ten.shape[d] for d in range(x.ten.dim())
         )
         out_tp_ten = torch.zeros(
-            out_shape, dtype=x.dtype, device=x.device
+            out_shape, dtype=x.ten.dtype, device=x.device
         ).index_add_(
-            coupling_dim, self.repids_cp_out, cat_tp_out
+            coupling_dim, self.repids_tp_out, cat_tp_out.ten
         )
         # (1) + (3)
         out_tp_ten.index_select(
@@ -127,7 +147,7 @@ class SelfMixing(nn.Module):
         return self.tensor_class(
             data_ten=out_tp_ten,
             rep_dims=(coupling_dim,),
-            metadata=self.metadata_out
+            metadata=self.metadata_out.unsqueeze(0)
         )
         
 
@@ -284,7 +304,15 @@ class PairMixing(torch.nn.Module):
             metadata=self.metadata_out
         )
 
-      
+if __name__ == "__main__":
+    metadata_x = torch.LongTensor([3, 3, 1])
+    metadata_fix = torch.LongTensor([[3, 3, 1]])
+    x_ten = torch.randn(4, 6, 17, dtype=torch.double) 
+    x = SphericalTensor(x_ten, (2,), metadata_fix)
+    selfMixer = SelfMixing(metadata_x, order_out=3) 
+    y = selfMixer(x) 
+    print(y.shape) 
+    pass   
 
 
 
