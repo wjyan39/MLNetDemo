@@ -189,24 +189,25 @@ class PairMixing(nn.Module):
             metadata_out[lout] = max(metadata_out[lout], degeneracy)
             
         # generate flatten indexing for various tensors
-        max_n_out = metadata_out.max().item()
-        repid_offsets_out = torch.cumsum(metadata_out * n_irreps_per_l, dim=0)
-        repid_offsets_out = torch.cat(
-            [torch.LongTensor([0]), repid_offsets_out[:-1]], dim=0
-        )
+        metadata_out = torch.stack([metadata_out, self.CGCoupler.metadata_out], dim=0)
+        max_n_out = metadata_out[0].max().item()
+        repid_offsets_out = torch.cumsum(metadata_out * n_irreps_per_l.unsqueeze(0), dim=1)
+        repid_offsets = torch.cat(
+            [torch.LongTensor([[0], [0]]), repid_offsets[:, :-1]], dim=1
+        ).long()
         repids_out = [] # final output index for index_add
         tmp_out = [[] for _ in range(metadata_out.shape[0])]
         matrix_select_idx, matid_to_fanin = [], [], []
         out_reduce_idx, out_reduce_mask = [], []
-        mat_offset, dst_offset = 0, 0 
+        mat_offset = 0 
         for (lpout, _, _, degeneracy) in valid_coupling_ids:
             # Calculating the representation IDs for the coupling tensors
             l_degeneracy = 2 * (lpout // stepwise) + 1
             ls_segement = torch.arange(l_degeneracy).repeat_interleave(degeneracy)
             ns_segement = torch.arange(degeneracy).repeat(l_degeneracy)
             repids_out_3j = (
-                repid_offsets_out[lpout]
-                + ls_segement * metadata_out[lpout]
+                repid_offsets_out[0, lpout]
+                + ls_segement * metadata_out[0, lpout]
                 + ns_segement
             ).view(l_degeneracy, -1)
             tmp_out[lpout].append(repids_out_3j)
@@ -218,10 +219,10 @@ class PairMixing(nn.Module):
                 torch.full((1,), self.filter_channels, dtype=torch.long)
             )
             mat_offset += 1
-            out_ns_offset = self.CGCoupler.metadata_out[lpout].item()
+            out_ns_offset = metadata_out[1, lpout].item()
             for m in range(n_irreps_per_l[lpout]):
                 dst_idx_lpm = (
-                    dst_offset
+                    repid_offsets_out[1, lpout]
                     + out_ns_offset
                     + torch.arange(max_n_out, dtype=torch.long) 
                 ).contiguous() 
@@ -232,12 +233,12 @@ class PairMixing(nn.Module):
                 out_reduce_idx.append(dst_idx_lpm)
                 out_reduce_mask.append(dst_mask_lpm)
                 out_ns_offset += m * out_ns_offset
-            dst_offset += degeneracy 
+            
 
         for tmp_list in tmp_out:
             repids_out.append(torch.cat(tmp_list, dim=1).view(-1))
 
-        self.register_buffer("metadata_out", metadata_out)
+        self.register_buffer("metadata_out", metadata_out[0])
         self.register_buffer("repids_cp_out", torch.cat(repids_out).long())
         self.register_buffer("matrix_select_idx", torch.cat(matrix_select_idx))
         self.register_buffer("out_reduce_mask", torch.cat(out_reduce_mask).bool())
