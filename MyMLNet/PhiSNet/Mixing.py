@@ -298,7 +298,7 @@ class PairMixing(nn.Module):
         out_tp_ten = torch.zeros(
             out_shape, dtype=x.dtype, device=x.device
         ).index_add_(
-            coupling_dim, self.repids_cp_out, cat_tp_out
+            coupling_dim, self.repids_cp_out, cat_tp_out.ten
         )
 
         return self.tensor_class(
