@@ -304,7 +304,7 @@ class PairMixing(nn.Module):
         return self.tensor_class(
             data_ten=out_tp_ten,
             rep_dims=(coupling_dim,),
-            metadata=self.metadata_out
+            metadata=self.metadata_out.unsqueeze(0)
         )
 
 if __name__ == "__main__":
