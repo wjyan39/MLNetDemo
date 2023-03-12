@@ -2,11 +2,12 @@
 Utilities for converting AO basis Quamtum Chemistry calculated 
 feature matrices to machine learning convention, compatible 
 with SphericalTensor data structure.
+This file deals with PySCF form. 
 """
 
 import torch 
 import torch.nn as nn 
-from BasicUtility.O3.O3Tensor import SphericalTensor, O3Tensor
+from BasicUtility.O3.O3Tensor import SphericalTensor
 
 from pathlib import Path 
 
@@ -18,9 +19,12 @@ class OneBodyToSpherical(nn.Module):
         offset = 0
         out_ids = []
         for l, n in enumerate(self.metadata):
-            in_idx = torch.arange(offset, offset + n* (2*l+1)).long() 
-            out_idx =  in_idx.view(-1, 2*l + 1).t().flip(0).contiguous().view(-1) 
-            out_ids.append(out_idx) 
+            m_idx = torch.arange(offset, offset + n* (2*l+1)).long() 
+            # out_idx = in_idx.view(-1, 2*l + 1).t().flip(0).contiguous().view(-1) 
+            if l == 1:
+                # p orbital: x, y, z -> x, z, y
+                m_idx = m_idx.view(-1, 2*l + 1)[:, (1, 3, 2)].contiguous().view(-1)
+            out_ids.append(m_idx) 
             offset += n * (2*l + 1)
         self.register_buffer("out_ids", out_ids) 
         self.register_buffer("out_layout", SphericalTensor.generate_rep_layout_1d_(self.metadata)) 
@@ -35,15 +39,30 @@ class OneBodyToSpherical(nn.Module):
             (self.num_channels_1d,),
             (self.rep_layout),
         )
-        
+
+m_idx_map_pyscf = {
+    0:[0], 
+    1:[0, 2, 1], # input (x, y, z) -> (x, z, y)
+    2:[0, 1, 2, 3, 4], 
+    3:[0, 1, 2, 3, 4, 5, 6], 
+    4:[0, 1, 2, 3, 4, 5, 6, 7, 8],
+}
+
+m_idx_map_qcore = {
+    0:[0],
+    1:[2, 1, 0],
+    2:[4, 3, 2, 1, 0],
+}
+
+
 class TwoBodyToSpherical(nn.Module):
-    def __init__(self, metadata, rep_dims, basis_layout:dict, valence_only=True):
+    def __init__(self, metadata, rep_dims, basis_layout:dict, valence_only=True, m_idx_map=m_idx_map_pyscf):
         """
         Converting two-body features (order 2 tensor) loaded from QC Calculation to torch_gauge's 2d SphericalTensor.
         The returned 2d-SO(3) tensor is of symmetric layout along the rep_dims.        
         Args:
             basis_layout :: dictionary :: statements by the ao dictionary (value) of a typical element (key), e.g.
-                {"C":{"1s", "2s", "3s", "2p", "3p", "3d"}, "H":{"1s", "2s"}} etc. 
+                {"C":["1s", "2s", "3s", "2p", "3p", "3d"], "H":["1s", "2s"],} etc. 
         Note:
             The layout of two-body feature tensor depends on the basis set employed during QC calculation.
         """
@@ -58,9 +77,11 @@ class TwoBodyToSpherical(nn.Module):
             "g": 4, 
             "h": 5,
         }
-        
+        self._generate_buffers(basis_layout, valence_only, m_idx_map)
+    
+    def _generate_buffers(self, basis_layout, valence_only, m_idx_map): 
         out_repid_map = {}
-        n_irreps_per_l = torch.arange(len(metadata), dtype=torch.long) * 2 + 1
+        n_irreps_per_l = torch.arange(self.metadata.shape[0], dtype=torch.long) * 2 + 1
         rep_offsets = torch.cat(
             [torch.LongTensor([0]), torch.cumsum(self.metadata * n_irreps_per_l, dim=0)[:-1]]
         )
@@ -76,11 +97,13 @@ class TwoBodyToSpherical(nn.Module):
                 if l > l_last:
                     if m_qc != 0:
                         raise ValueError(f"Invalid basis index: element={element}, l={l}, m={m_qc}.")
+                    elif l not in m_idx_map:
+                        raise KeyError(f"Angular momentum quamtum number l={l} not defined in m_idx_map.")
                     dst_n_current = 0 
                 if not valence_only:
                     dst_n_current = n - l  
-                # reverse magnetic quamtum number ordering
-                m_out = 2*l - m_qc 
+                # m index according to given m_idx_map 
+                m_out = m_idx_map[l][m_qc]
                 repid_map[ao_id] = rep_offsets[l] + dst_n_current + m_out*self.metadata[l] 
                 # update m and n 
                 if m_qc == 2 * l:
@@ -134,7 +157,7 @@ class TwoBodyToSpherical(nn.Module):
         )
 
 class OneBodySphericalToInterleaved(nn.Module):
-    def __init__(self, metadata, basis_set="def2-tzvp-jkfit", padding_size=128):
+    def __init__(self, metadata, basis_set="def2-tzvp-jkfit", padding_size=128, m_idx_map=m_idx_map_pyscf):
         """
         Converting model-predicted spherical tensor to QC calculation form layout.
         """
@@ -172,9 +195,9 @@ class OneBodySphericalToInterleaved(nn.Module):
                         raise ValueError(
                             f"Number of shells exceeding the metadata: element={element}, l={l}, n={dst_n_current} "
                         )
-                    for m_qcore in range(2 * l + 1):
+                    for m_qc in range(2 * l + 1):
                         # Reversing the magnetic quantum numbers to match the ordering
-                        m_out = 2 * l - m_qcore
+                        m_out = m_idx_map[l][m_qc]
                         out_repid_map[element, src_id] = rep_offsets[l] + dst_n_current + m_out * self.metadata[l]
                         out_repid_mask[element, src_id] = 1
                         src_id += 1
@@ -204,7 +227,7 @@ RAW_3IDX = THIS_FOLDER / "orbnet2_overlap3idx.pt"
 REDUCTION_DIM = 84
 
 class OneBodyReduction(nn.Module):
-    def __init__(self, metadata, basis_layout:dict, valence_only=True, file_3idx=RAW_3IDX):
+    def __init__(self, metadata, basis_layout:dict, valence_only=True, file_3idx=RAW_3IDX, m_idx_map=m_idx_map_pyscf):
         super().__init__()
         self.metadata = torch.LongTensor(metadata)
         self.angular_map = {
@@ -239,21 +262,23 @@ class OneBodyReduction(nn.Module):
             repid_map = torch.zeros(len(aos_map), dtype=torch.long)
             dst_n_current = 0
             l_last = 0
-            m_qcore = 0
+            m_qc = 0
             for ao_id, ao_name in enumerate(aos_map):
                 n, l = int(ao_name[0]), self.angular_map[ao_name[1]]
                 if l > l_last:
-                    if m_qcore != 0:
-                        raise ValueError(f"Invalid basis index: element={element}, l={l}, m={m_qcore}")
+                    if m_qc != 0:
+                        raise ValueError(f"Invalid basis index: element={element}, l={l}, m={m_qc}")
+                    elif l not in m_idx_map:
+                        raise KeyError(f"Angular momentum quamtum number l={l} not defined in m_idx_map.")
                     dst_n_current = 0
                 if not valence_only:
                     dst_n_current = n - l
-                # Reversing the magnetic quantum numbers to match the ordering
-                m_out = 2 * l - m_qcore
+                # m index according to given m_idx_map 
+                m_out = m_idx_map[l][m_qc]
                 repid_map[ao_id] = rep_offsets[l] + dst_n_current + m_out * self.metadata[l]
                 # Update m and n
-                if m_qcore == 2 * l:
-                    m_qcore = 0
+                if m_qc == 2 * l:
+                    m_qc = 0
                     if valence_only:
                         dst_n_current += 1
                     if dst_n_current > self.metadata[l]:
@@ -261,7 +286,7 @@ class OneBodyReduction(nn.Module):
                             f"Number of shells exceeding the metadata: element={element}, l={l}, n={dst_n_current} "
                         )
                 else:
-                    m_qcore += 1
+                    m_qc += 1
                 l_last = l
             # 
             padded_3idx_flat = torch.zeros(
