@@ -50,4 +50,17 @@ class EmbeddingLayer(nn.Module):
         """
         v_i = self.embedding(Z) 
         return v_i 
+
+
+def NormLayer(num_features, mode="batch"):
+    if mode == "batch":
+        return nn.BatchNorm1d(num_features, momentum=0.4, affine=True) 
+    elif mode == "layer":
+        return nn.LayerNorm(num_features, elementwise_affine=True) 
+    elif mode == "node":
+        return nn.LayerNorm(num_features, elementwise_affine=False) 
+    elif mode == "none":
+        return nn.Identity() 
+    else:
+        raise NotImplemented 
     

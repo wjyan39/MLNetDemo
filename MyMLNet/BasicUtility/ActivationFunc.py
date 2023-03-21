@@ -52,6 +52,7 @@ activation_func_config = {
     'ssp': ShiftedSoftPlus(),
     'relu': ReLU(),
     'silu': Swish(),
+    'leaky_relu': nn.LeakyReLU(negative_slope=0.05, inplace=True)
 }
 
 
