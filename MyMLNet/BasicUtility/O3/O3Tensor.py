@@ -4,7 +4,7 @@ Basic abstract Data Structure for SO(3) Equivariant Neural Network manipulations
 
 import numpy as np 
 import torch 
-import BasicUtility.O3
+from BasicUtility.O3.O3Utility import NormContraction1d, SumsqrContraction1d, NormContraction2d, SumsqrContraction2d
 
 from dataclasses import dataclass 
 from typing import Tuple 
@@ -281,7 +281,60 @@ class SphericalTensor:
                 rep_layout=rep_layout_t,
                 num_channels=num_channels_t,
             )
-
+    
+    def invariant(self, mode="l2") -> torch.Tensor:
+        """
+        Returns the invariant content of a SphericalTensor
+        When self.n_rep_dim==1, the l=0 channels are retained;
+        when self.n_rep_dim==2, the (l1=0, l2=0) channels are also contracted.
+        """
+        if len(self.rep_dims) == 1:
+            l0_length = self.metadata[0, 0]
+            ops_dim = self.rep_dims[0] 
+            data_l0 = torch.narrow(self.ten, dim=ops_dim, start=0, length=l0_length) 
+            norm_shape = list(self.shape) 
+            norm_shape[ops_dim] = self.num_channels[0] - l0_length
+            data_rep = torch.narrow(
+                self.ten, dim=ops_dim, start=l0_length, length=self.ten.shape[ops_dim] - l0_length
+            ) 
+            idx_ten = self.rep_layout[0][2, l0_length:].sub(l0_length) 
+            if mode == "l2":
+                invariant_rep = NormContraction1d.apply(data_rep, idx_ten, norm_shape, ops_dim, self._norm_eps) 
+            elif mode == "uest":
+                invariant_rep = NormContraction1d.apply(data_rep, idx_ten, norm_shape, ops_dim, 1.0) 
+            elif mode == "sumsqr":
+                invariant_rep = SumsqrContraction1d.apply(data_rep, idx_ten, norm_shape, ops_dim) 
+            else:
+                raise NotImplementedError 
+            return torch.cat([data_l0, invariant_rep], dim=ops_dim) 
+        elif len(self.rep_dims) == 2:
+            idx_ten_0 = (
+                self.rep_layout[0][2, :].unsqueeze(1)
+                .expand(
+                    self.ten.shape[self.rep_dims[0]], self.ten.shape[self.rep_dims[1]]
+                )
+            )
+            idx_ten_1 = (
+                self.rep_layout[1][2, :].unsqueeze(0)
+                .expand(
+                    self.ten.shape[self.rep_dims[0]], self.ten.shape[self.rep_dims[1]]
+                )
+            )
+            idx_tens = torch.stack([idx_ten_0, idx_ten_1], dim=0) 
+            norm_shape = list(self.shape) 
+            norm_shape[self.rep_dims[0]] = self.num_channels[0]
+            norm_shape[self.rep_dims[1]] = self.num_channels[1]
+            if mode == "l2":
+                invariant_2d = NormContraction2d.apply(self.ten, idx_tens, norm_shape, self.rep_dims, self._norm_eps) 
+            elif mode == "uest":
+                invariant_2d = NormContraction2d.apply(self.ten, idx_tens, norm_shape, self.rep_dims, 1.0) 
+            elif mode == "sumsqr":
+                invariant_2d = SumsqrContraction2d.apply(self.ten, idx_tens, norm_shape, self.rep_dims)
+            else:
+                raise NotImplementedError 
+        else:
+            raise NotImplementedError 
+        
     def generate_rep_layout(self) -> Tuple[torch.LongTensor, ...]:
         if len(self.rep_dims) == 1:
             return (self.generate_rep_layout_1d_(self.metadata[0]).to(self.ten.device),) 

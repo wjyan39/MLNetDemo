@@ -319,7 +319,7 @@ class EvMLP1d(torch.nn.Module):
         if norm is not None:
             self.mlp = torch.nn.Sequential(
                 norm, 
-                torch.nn.Linear(self.num_channels),
+                torch.nn.Linear(self.num_channels, self.num_channels),
                 activation_func,
                 torch.nn.Linear(self.num_channels, self.num_channels),
                 torch.nn.Dropout(p=self.dropout)
