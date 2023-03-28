@@ -16,21 +16,23 @@ class SphLinear(nn.Module):
         self.metadata_in = metadata_in
         self.metadata_out = target_metadata
         self.group = group
-        self.SelfMix = SelfMixing(metadata=metadata_in, order_out=max_l, group=group) 
+        self.selfmix = SelfMixing(metadata=metadata_in, order_out=max_l, group=group) 
         inter_metadata = self.SelfMix.metadata_out 
-        self.IELinear = IELin(metadata_in=inter_metadata, metadata_out=target_metadata, group=group)
+        self.irrep_lin = IELin(metadata_in=inter_metadata, metadata_out=target_metadata, group=group)
 
     def forward(self, x:SphericalTensor) -> SphericalTensor:
         assert torch.all(x.metadata[-1].eq(self.metadata_in))
-        mix_x = self.SelfMix(x) 
-        return self.IELinear(mix_x)
+        mix_x = self.selfmix(x) 
+        out = self.irrep_lin(mix_x)
+        return out 
 
 
 class Residual(nn.Module):
     """
-    Residual Block in PhiSNet
+    Modified Residual Block in PhiSNet.
+    Apply Gate accivation on full features. 
     """
-    def __init__(self, metadata:torch.LongTensor, activation, group="so3"):
+    def __init__(self, metadata:torch.LongTensor, activation="silu", group="so3"):
         assert metadata.dim() == 1
         super().__init__()
         order = metadata.shape[0]
@@ -42,8 +44,11 @@ class Residual(nn.Module):
     def forward(self, x:SphericalTensor) -> SphericalTensor:
         assert torch.all(x.metadata[-1].eq(self.metadata_in))
         x_cut = x 
-        sph_x = self.sphlin2(self.activation(self.sphlin1(self.activation(x))))
-        out_ten = x_cut.ten + sph_x.ten 
+        x_inv = x.invariant()
+        x1 = self.sphlin1(x.scalar_mul(self.activation(x_inv))) 
+        x1_inv = x1.invariant() 
+        x2 = self.sphlin2(x1.scalar_mul(self.activation(x1_inv)))
+        out_ten = x_cut.ten + x2.ten 
         return x.self_like(out_ten)
 
 
@@ -107,6 +112,7 @@ class ScaLinear(nn.Module):
         self.register_buffer("out_reduce_mask", torch.cat(out_reduce_mask).bool())
         self.register_buffer("out_reduce_idx", torch.cat(out_reduce_idx)[self.out_reduce_mask])
         self.register_buffer("out_layout", self.tensor_class.generate_rep_layout_1d_(self.metadata_out))
+        self.num_channels = torch.sum(self.metadata_out).item()
         self.matid_to_fanin = torch.cat(matid_to_fanin)
         self.n_gathered_mats = self.matrix_select_idx.shape[0]
         self._reset_params()
@@ -142,6 +148,8 @@ class ScaLinear(nn.Module):
         return self.tensor_class(
             data_ten=out_ten,
             rep_dims=(x.dim()-1,),
-            metadata=self.metadata_out
+            metadata=self.metadata_out,
+            rep_layout=self.out_layout,
+            num_channels=(self.num_channels,),
         )
 
